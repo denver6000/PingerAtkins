@@ -106,6 +106,7 @@ struct MonitorApp {
     click_through: bool,
     anchored: bool,
     minimized: bool,
+    panel_hovered: bool,
 }
 
 impl MonitorApp {
@@ -119,6 +120,7 @@ impl MonitorApp {
             click_through: false,
             anchored: false,
             minimized: false,
+            panel_hovered: false,
         }
     }
 
@@ -146,7 +148,7 @@ impl eframe::App for MonitorApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.poll_updates();
         anchor_overlay(ctx, &mut self.anchored);
-        let hovered = ctx.is_pointer_over_area();
+        let hovered = self.panel_hovered;
         ctx.request_repaint_after(if hovered {
             UI_HOVER_REPAINT
         } else {
@@ -155,25 +157,27 @@ impl eframe::App for MonitorApp {
         let panel_fill = if hovered {
             Color32::from_rgba_unmultiplied(10, 14, 22, 196)
         } else {
-            Color32::from_rgba_unmultiplied(10, 14, 22, 72)
+            Color32::from_rgba_unmultiplied(10, 14, 22, 28)
         };
         let border = if hovered {
             Color32::from_rgba_unmultiplied(90, 130, 150, 120)
         } else {
-            Color32::from_rgba_unmultiplied(90, 130, 150, 55)
+            Color32::from_rgba_unmultiplied(90, 130, 150, 20)
         };
 
         egui::CentralPanel::default()
+            .frame(egui::Frame::NONE.fill(Color32::TRANSPARENT))
             .show(ctx, |ui| {
-                ui.visuals_mut().override_text_color = Some(Color32::WHITE);
+                ui.visuals_mut().override_text_color =
+                    Some(fade_color(Color32::WHITE, hovered, 255, 115));
                 handle_shortcuts(ctx, self);
-                egui::Frame::default()
+                let frame_response = egui::Frame::default()
                     .fill(panel_fill)
                     .corner_radius(10.0)
                     .stroke(egui::Stroke::new(1.0, border))
                     .inner_margin(egui::Margin::same(12))
                     .show(ui, |ui| {
-                        render_overlay_header(ui, ctx, self);
+                        render_overlay_header(ui, ctx, self, hovered);
 
                         if self.minimized {
                             if let Some(snapshot) = &self.latest {
@@ -187,10 +191,15 @@ impl eframe::App for MonitorApp {
                                     ))
                                     .monospace()
                                     .size(12.0)
-                                    .color(status_color(&net.label)),
+                                    .color(status_color(&net.label, hovered)),
                                 );
                             } else {
-                                ui.label(RichText::new("Collecting...").monospace().size(12.0));
+                                ui.label(
+                                    RichText::new("Collecting...")
+                                        .monospace()
+                                        .size(12.0)
+                                        .color(fade_color(Color32::WHITE, hovered, 255, 115)),
+                                );
                             }
                             return;
                         }
@@ -215,10 +224,10 @@ impl eframe::App for MonitorApp {
                                     ui.add_space(12.0);
 
                                     if self.compact_mode {
-                                        render_compact_network(ui, &snapshot.network);
+                                        render_compact_network(ui, &snapshot.network, hovered);
                                         ui.add_space(6.0);
                                         for site in &snapshot.sites {
-                                            render_compact_site(ui, site);
+                                            render_compact_site(ui, site, hovered);
                                             ui.add_space(4.0);
                                         }
                                     } else {
@@ -230,6 +239,7 @@ impl eframe::App for MonitorApp {
                                             &snapshot.network.speed,
                                             snapshot.network.loss_percent,
                                             &snapshot.network.trend,
+                                            hovered,
                                         );
 
                                         ui.add_space(8.0);
@@ -243,6 +253,7 @@ impl eframe::App for MonitorApp {
                                                 &site.status,
                                                 site.loss_percent,
                                                 &site.trend,
+                                                hovered,
                                             );
                                             ui.add_space(8.0);
                                         }
@@ -260,13 +271,19 @@ impl eframe::App for MonitorApp {
                                 }
                             });
                     });
+                self.panel_hovered = frame_response.response.hovered();
             });
     }
 }
 
-fn render_overlay_header(ui: &mut egui::Ui, ctx: &egui::Context, app: &mut MonitorApp) {
+fn render_overlay_header(ui: &mut egui::Ui, ctx: &egui::Context, app: &mut MonitorApp, hovered: bool) {
     ui.horizontal(|ui| {
-        ui.heading(RichText::new("Network Overlay").size(19.0).strong());
+        ui.heading(
+            RichText::new("Network Overlay")
+                .size(19.0)
+                .strong()
+                .color(fade_color(Color32::WHITE, hovered, 255, 135)),
+        );
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             let kill = egui::Button::new(RichText::new("X").strong().color(Color32::WHITE))
                 .fill(Color32::from_rgb(160, 40, 40));
@@ -285,12 +302,33 @@ fn render_overlay_header(ui: &mut egui::Ui, ctx: &egui::Context, app: &mut Monit
                 app.anchored = false;
             }
 
+            let drag_enabled = !app.click_through;
+            if drag_enabled {
+                let drag_button = ui
+                    .add(
+                        egui::Button::new(RichText::new("::").monospace())
+                            .sense(egui::Sense::click_and_drag()),
+                    )
+                    .on_hover_cursor(egui::CursorIcon::Grab)
+                    .on_hover_text("Drag to reposition overlay");
+                if drag_button.drag_started() {
+                    ctx.send_viewport_cmd(egui::ViewportCommand::StartDrag);
+                }
+            } else {
+                ui.add_enabled(false, egui::Button::new(RichText::new("::").monospace()))
+                    .on_hover_text("Turn click-through off first to drag the overlay");
+            }
+
             let mode = if app.click_through {
                 "click-through on"
             } else {
                 "click-through off"
             };
-            ui.label(RichText::new(mode).size(11.0).color(Color32::LIGHT_GRAY));
+            ui.label(
+                RichText::new(mode)
+                    .size(11.0)
+                    .color(fade_color(Color32::LIGHT_GRAY, hovered, 255, 115)),
+            );
         });
     });
 }
@@ -341,7 +379,7 @@ fn anchor_overlay(ctx: &egui::Context, anchored: &mut bool) {
     *anchored = true;
 }
 
-fn render_compact_network(ui: &mut egui::Ui, network: &NetworkResult) {
+fn render_compact_network(ui: &mut egui::Ui, network: &NetworkResult, hovered: bool) {
     let title = format!(
         "NET {} [{} ms]  loss {}%  {}  {}",
         network.label,
@@ -350,10 +388,10 @@ fn render_compact_network(ui: &mut egui::Ui, network: &NetworkResult) {
         network.speed,
         network.trend
     );
-    render_compact_row(ui, &title, status_color(&network.label));
+    render_compact_row(ui, &title, status_color(&network.label, hovered), hovered);
 }
 
-fn render_compact_site(ui: &mut egui::Ui, site: &SiteResult) {
+fn render_compact_site(ui: &mut egui::Ui, site: &SiteResult, hovered: bool) {
     let summary = format!(
         "{}: {} [{} ms]  loss {}%  {}",
         site.name,
@@ -362,18 +400,36 @@ fn render_compact_site(ui: &mut egui::Ui, site: &SiteResult) {
         site.loss_percent,
         site.trend
     );
-    render_compact_row(ui, &summary, status_color(&site.status));
+    render_compact_row(ui, &summary, status_color(&site.status, hovered), hovered);
 }
 
-fn render_compact_row(ui: &mut egui::Ui, text: &str, accent: Color32) {
+fn render_compact_row(ui: &mut egui::Ui, text: &str, accent: Color32, hovered: bool) {
     egui::Frame::group(ui.style())
-        .fill(Color32::from_rgba_unmultiplied(15, 21, 31, 168))
-        .stroke(egui::Stroke::new(1.0, Color32::from_rgba_unmultiplied(70, 100, 120, 120)))
+        .fill(fade_color(
+            Color32::from_rgba_unmultiplied(15, 21, 31, 168),
+            hovered,
+            168,
+            40,
+        ))
+        .stroke(egui::Stroke::new(
+            1.0,
+            fade_color(
+                Color32::from_rgba_unmultiplied(70, 100, 120, 120),
+                hovered,
+                120,
+                24,
+            ),
+        ))
         .corner_radius(8.0)
         .show(ui, |ui| {
             ui.horizontal_wrapped(|ui| {
                 ui.colored_label(accent, "■");
-                ui.label(RichText::new(text).monospace().size(12.0));
+                ui.label(
+                    RichText::new(text)
+                        .monospace()
+                        .size(12.0)
+                        .color(fade_color(Color32::WHITE, hovered, 255, 115)),
+                );
             });
         });
 }
@@ -386,27 +442,36 @@ fn render_metric_block(
     speed: &str,
     loss_percent: u32,
     trend: &str,
+    hovered: bool,
 ) {
     egui::Frame::group(ui.style())
-        .fill(Color32::from_rgba_unmultiplied(15, 21, 31, 180))
+        .fill(fade_color(
+            Color32::from_rgba_unmultiplied(15, 21, 31, 180),
+            hovered,
+            180,
+            45,
+        ))
         .corner_radius(8.0)
         .show(ui, |ui| {
             ui.label(RichText::new(title).strong());
             ui.horizontal(|ui| {
                 ui.label("Status:");
-                ui.colored_label(status_color(label), format!("{label} [{} ms]", display_ms(avg_ms)));
+                ui.colored_label(
+                    status_color(label, hovered),
+                    format!("{label} [{} ms]", display_ms(avg_ms)),
+                );
             });
             ui.horizontal(|ui| {
                 ui.label("Speed:");
-                ui.colored_label(status_color(speed), speed);
+                ui.colored_label(status_color(speed, hovered), speed);
             });
             ui.horizontal(|ui| {
                 ui.label("Loss:");
-                ui.colored_label(loss_color(loss_percent), format!("{loss_percent}%"));
+                ui.colored_label(loss_color(loss_percent, hovered), format!("{loss_percent}%"));
             });
             ui.horizontal(|ui| {
                 ui.label("Trend:");
-                ui.colored_label(status_color(trend), trend);
+                ui.colored_label(status_color(trend, hovered), trend);
             });
         });
 }
@@ -419,24 +484,31 @@ fn display_ms(avg_ms: i64) -> String {
     }
 }
 
-fn status_color(status: &str) -> Color32 {
-    match status {
+fn status_color(status: &str, hovered: bool) -> Color32 {
+    let color = match status {
         "EXCELLENT" | "FAST" | "IMPROVING" => Color32::from_rgb(102, 255, 102),
         "GOOD" => Color32::from_rgb(200, 255, 120),
         "FAIR" | "STABLE" => Color32::from_rgb(255, 225, 90),
         "POOR" | "SLOW" => Color32::from_rgb(255, 120, 90),
         "DOWN" | "DETERIORATING" => Color32::from_rgb(255, 80, 80),
         _ => Color32::WHITE,
-    }
+    };
+    fade_color(color, hovered, 255, 120)
 }
 
-fn loss_color(loss: u32) -> Color32 {
-    match loss {
+fn loss_color(loss: u32, hovered: bool) -> Color32 {
+    let color = match loss {
         0 => Color32::from_rgb(102, 255, 102),
         1..=10 => Color32::from_rgb(200, 255, 120),
         11..=30 => Color32::from_rgb(255, 225, 90),
         _ => Color32::from_rgb(255, 80, 80),
-    }
+    };
+    fade_color(color, hovered, 255, 120)
+}
+
+fn fade_color(color: Color32, hovered: bool, hover_alpha: u8, idle_alpha: u8) -> Color32 {
+    let alpha = if hovered { hover_alpha } else { idle_alpha };
+    Color32::from_rgba_unmultiplied(color.r(), color.g(), color.b(), alpha)
 }
 
 fn get_level(ms: i64) -> &'static str {
